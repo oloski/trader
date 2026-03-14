@@ -1,6 +1,10 @@
 FROM nvcr.io/nvidia/pytorch:24.01-py3
 
-RUN pip install --no-cache-dir vllm pandas numpy redis
+RUN pip install --no-cache-dir \
+    vllm pandas numpy redis \
+    pandas_ta requests \
+    "unsloth[cu124-torch240] @ git+https://github.com/unslothai/unsloth.git" \
+    PyMuPDF trl peft datasets
 
 WORKDIR /app
 COPY trading_core.py .

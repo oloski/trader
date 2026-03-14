@@ -1,5 +1,5 @@
 # Ignoruj folder z danymi, wagami modeli i logami treningu
-shared_data/
+shared_data/librbry
 
 # Ignoruj środowiska wirtualne Pythona
 venv/

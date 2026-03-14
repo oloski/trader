@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Blackwell Trader AI - Status</title>
+    <style>
+        body { background: #0d1117; color: #58a6ff; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+        .card { background: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .progress-bar { width: 100%; background: #30363d; height: 25px; border-radius: 12px; overflow: hidden; }
+        .progress-fill { width: 0%; height: 100%; background: #238636; transition: width 0.5s; }
+        h1 { color: #f0f6fc; }
+        .status-online { color: #3fb950; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ Blackwell Trader AI Control Panel</h1>
+    <div class="card">
+        <h3>Status Systemu: <span id="status" class="status-online">TRENING W TOKU</span></h3>
+        <p>Model: <strong>Nemotron-3-Super-120B-A12B</strong></p>
+        <p>Hardware: <strong>NVIDIA Blackwell 128GB VRAM</strong></p>
+    </div>
+    <div class="card">
+        <h3>Postęp Treningu</h3>
+        <div class="progress-bar"><div id="progress" class="progress-fill" style="width: 45%;"></div></div>
+        <p id="iter">Iteracja: 450 / 1000</p>
+    </div>
+    <script>
+        // Tutaj można dodać prosty fetch() do pliku JSON generowanego przez skrypt treningowy
+        setInterval(() => {
+            // Funkcja do odświeżania postępu z pliku shared_data/ui/stats.json
+        }, 5000);
+    </script>
+</body>
+</html>
