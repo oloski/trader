@@ -1,0 +1,23 @@
+# Ignoruj folder z danymi, wagami modeli i logami treningu
+shared_data/
+
+# Ignoruj środowiska wirtualne Pythona
+venv/
+.venv/
+env/
+
+# Ignoruj pliki konfiguracyjne z kluczami API (np. .env)
+*.env
+.secret*
+
+# Ignoruj pliki tymczasowe Pythona
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignoruj logi Docker
+*.log
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db

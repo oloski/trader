@@ -1,0 +1,33 @@
+version: '3.9'
+
+services:
+  # Główny kontener do treningu i logiki
+  blackwell_trader:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: blackwell_trader_ai
+    volumes:
+      - ./shared_data:/app/shared_data
+      - ./training_scripts:/app/scripts
+    environment:
+      - ALPHA_VANTAGE_KEY=${ALPHA_VANTAGE_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    networks: [trader_net]
+
+  # Dashboard informacyjny
+  dashboard:
+    image: nginx:alpine
+    container_name: trader_dashboard
+    ports: ["8080:80"]
+    volumes:
+      - ./shared_data/ui:/usr/share/nginx/html
+    networks: [trader_net]
+
+networks:
+  trader_net:
+    driver: bridge
