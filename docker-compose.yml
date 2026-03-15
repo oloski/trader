@@ -1,21 +1,15 @@
-version: '3.8'
-
 services:
   blackwell_trader_ai:
     container_name: blackwell_trader_ai
-    image: nvidia/cuda:12.8.0-devel-ubuntu22.04  # Najnowsza baza pod Blackwell (2026)
-    runtime: nvidia
+    build:
+      context: ./agents/trading_brain
+      dockerfile: Dockerfile
     environment:
+      - ALPHA_VANTAGE_KEY=${ALPHA_VANTAGE_KEY}
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - HF_HOME=/app/shared_data/hf_cache
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
     volumes:
-      # Mapujemy skrypty treningowe
-      - /home/trader/training_scripts:/app/scripts
-      # Mapujemy dysk na dane (modele, dataset, cache)
-      - /home/trader/shared_data:/app/shared_data
-    # Zwiększony limit pamięci współdzielonej dla modeli 100B+
+      - ./training_scripts:/app/scripts
+      - ./shared_data:/app/shared_data
     shm_size: '16gb'
     deploy:
       resources:
@@ -26,6 +20,13 @@ services:
               capabilities: [gpu]
     stdin_open: true
     tty: true
-    restart: unless-stopped
-    # Ustawiamy working directory wewnątrz kontenera
-    working_dir: /app
+
+  dashboard:
+    container_name: trader_dashboard
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./shared_data/ui:/usr/share/nginx/html:ro
+    depends_on:
+      - blackwell_trader_ai

@@ -1,103 +1,111 @@
 import os
-import pandas as pd
 import requests
+import pandas as pd
 import time
-import sys
+from datetime import datetime
 
-API_KEY = os.getenv("ALPHA_VANTAGE_KEY")
+# 1. KONFIGURACJA
+API_KEY = os.getenv('ALPHA_VANTAGE_KEY')
+BASE_URL = 'https://www.alphavantage.co/query'
+SAVE_PATH = '/app/shared_data/raw_market_data/'
+MAX_RETRIES = 3 # Zabezpieczenie przed pętlą limitów
 
-ASSETS = {
-    "STOCKS": [
-        "SPY", "QQQ", "DIA", "IWM", "EWG", "EPOL", "VGK", "EWJ", "FXI", "INDA",
-        "NVDA", "AAPL", "TSLA", "AMD", "GLD", "SLV", "PALL", "TLT", "UUP", "VXX"
-    ],
-    "FOREX": [
-        ("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY"), ("USD", "PLN"), ("AUD", "USD")
-    ],
-    "MACRO": [
-        "FEDERAL_FUNDS_RATE", "TREASURY_YIELD", "CPI", "UNEMPLOYMENT"
-    ],
-    "COMMODITIES": [
-        "WTI", "BRENT", "NATURAL_GAS", "WHEAT", "CORN", "COFFEE", "SUGAR"
-    ], 
-    "CRYPTO": ["BTC", "ETH", "SOL"]
-}
+os.makedirs(SAVE_PATH, exist_ok=True)
 
-def calculate_indicators(df, h_col, l_col, c_col):
-    df = df.copy()
-    for col in [h_col, l_col, c_col]:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df = df.dropna(subset=[h_col, l_col, c_col]).copy()
-    high, low, close = df[h_col], df[l_col], df[c_col]
-    prev_close = close.shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
-    df.loc[:, 'ATR'] = tr.rolling(window=20).mean()
-    df.loc[:, 'DC_H'] = high.rolling(window=20).max()
-    df.loc[:, 'DC_L'] = low.rolling(window=20).min()
-    return df.dropna()
-
-def fetch_data():
-    if not API_KEY:
-        print("❌ BŁĄD: Brak klucza API!")
-        sys.exit(1)
-        
-    path = "/app/shared_data/library"
-    os.makedirs(path, exist_ok=True)
-
-    for cat, items in ASSETS.items():
-        for item in items:
-            name = f"{item[0]}{item[1]}" if isinstance(item, tuple) else item
-            print(f"📥 Pobieranie {cat}: {name}...")
+def fetch_data(params):
+    """Pobiera dane z pętlą while (Fix 3: brak rekurencji)."""
+    params['apikey'] = API_KEY
+    retries = 0
+    
+    while retries < MAX_RETRIES:
+        try:
+            response = requests.get(BASE_URL, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
             
-            try:
-                if cat == "STOCKS":
-                    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={item}&outputsize=full&apikey={API_KEY}"
-                elif cat == "FOREX":
-                    url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={item[0]}&to_symbol={item[1]}&outputsize=full&apikey={API_KEY}"
-                elif cat == "MACRO":
-                    # Poprawka dla Treasury Yield
-                    maturity = "&maturity=10year" if item == "TREASURY_YIELD" else ""
-                    url = f"https://www.alphavantage.co/query?function={item}{maturity}&apikey={API_KEY}"
-                elif cat == "COMMODITIES":
-                    url = f"https://www.alphavantage.co/query?function={item}&apikey={API_KEY}"
-                elif cat == "CRYPTO":
-                    url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={item}&market=USD&apikey={API_KEY}"
+            if "Note" in data:
+                print(f"⚠️ Limit API (próba {retries+1}/{MAX_RETRIES}). Czekam 60s...")
+                time.sleep(60)
+                retries += 1
+                continue
+            
+            return data
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Błąd sieciowy: {e}")
+            break
+    return None
 
-                r = requests.get(url).json()
-                key = next((k for k in r.keys() if any(x in k for x in ["Time Series", "data", "Digital Currency"])), None)
+def calculate_market_indicators(df):
+    """Wskaźniki dla OHLC (Giełda/Crypto)."""
+    df['dc_high'] = df['high'].rolling(window=20).max()
+    df['dc_low'] = df['low'].rolling(window=20).min()
+    df['dc_mid'] = (df['dc_high'] + df['dc_low']) / 2
+    
+    tr1 = df['high'] - df['low']
+    tr2 = abs(df['high'] - df['close'].shift())
+    tr3 = abs(df['low'] - df['close'].shift())
+    df['atr'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(window=14).mean()
+    
+    return df.fillna(0)
 
-                if key:
-                    raw_data = r[key]
-                    df = pd.DataFrame(raw_data) if isinstance(raw_data, list) else pd.DataFrame.from_dict(raw_data, orient='index')
-                    if 'date' in df.columns: df = df.set_index('date')
-                    df = df.sort_index()
+def calculate_macro_indicators(df):
+    """Wskaźniki dla danych MACRO (Momentum/Trend)."""
+    df['momentum'] = df['value'].pct_change()
+    df['trend_ma'] = df['value'].rolling(window=7).mean()
+    return df.dropna() # Fix 1: usuwamy brakujące, nie wstawiamy 0
 
-                    if cat == "COMMODITIES" or cat == "MACRO":
-                        df = calculate_indicators(df, 'value', 'value', 'value')
-                    elif cat == "CRYPTO":
-                        # Super-bezpieczny selektor kolumn dla Crypto
-                        cols = df.columns.tolist()
-                        h = [c for c in cols if 'high' in c.lower() and 'usd' in c.lower()]
-                        l = [c for c in cols if 'low' in c.lower() and 'usd' in c.lower()]
-                        c = [c for c in cols if 'close' in c.lower() and 'usd' in c.lower()]
-                        # Jeśli nie znalazł z (USD), weź pierwsze z brzegu high/low/close
-                        h_col = h[0] if h else [c for c in cols if 'high' in c.lower()][0]
-                        l_col = l[0] if l else [c for c in cols if 'low' in c.lower()][0]
-                        c_col = c[0] if c else [c for c in cols if 'close' in c.lower()][0]
-                        df = calculate_indicators(df, h_col, l_col, c_col)
-                    elif cat == "STOCKS":
-                        df = calculate_indicators(df, df.columns[1], df.columns[2], df.columns[4])
-                    else: # FOREX
-                        df = calculate_indicators(df, df.columns[1], df.columns[2], df.columns[3])
-                    
-                    df.to_csv(f"{path}/{name}_enriched.csv")
-                    print(f"   ✅ Zapisano {name} ({len(df)} rekordów)")
-                else:
-                    print(f"   ❌ Pominięto {item}: {r.get('Note', r.get('Error Message', 'Brak danych'))}")
-            except Exception as e:
-                print(f"   ❌ Błąd krytyczny dla {item}: {e}")
-            time.sleep(1.0)
+def get_crypto_data(symbol):
+    print(f"📥 Pobieranie Crypto: {symbol}")
+    params = {"function": "DIGITAL_CURRENCY_DAILY", "symbol": symbol, "market": "USD"}
+    data = fetch_data(params)
+    
+    if data and "Time Series (Digital Currency Daily)" in data:
+        raw = data["Time Series (Digital Currency Daily)"]
+        df = pd.DataFrame.from_dict(raw, orient='index')
+        
+        # Fix 2: Selekcja po nazwach (bezpieczniejsza niż slicing)
+        col_map = {
+            '1b. open (USD)': 'open',
+            '2b. high (USD)': 'high',
+            '3b. low (USD)': 'low',
+            '4b. close (USD)': 'close',
+            '5. volume': 'volume'
+        }
+        df = df.rename(columns=col_map)[list(col_map.values())].astype(float)
+        return calculate_market_indicators(df.sort_index())
+    return None
+
+def get_macro_data(function, name):
+    print(f"📥 Pobieranie Macro: {name}")
+    data = fetch_data({"function": function})
+    
+    if data and "data" in data:
+        df = pd.DataFrame(data["data"])
+        # Fix 1: '.' na NaN i usuwanie braków
+        df['value'] = pd.to_numeric(df['value'].replace('.', float('nan')), errors='coerce')
+        df = df.dropna().set_index('date').sort_index()
+        return calculate_macro_indicators(df)
+    return None
+
+def main():
+    if not API_KEY:
+        print("❌ BŁĄD: Brak ALPHA_VANTAGE_KEY!")
+        return
+
+    assets = {
+        "crypto": ["BTC", "ETH"],
+        "macro": [("FEDERAL_FUNDS_RATE", "FED_RATE"), ("CPI", "INFLATION")]
+    }
+
+    for symbol in assets["crypto"]:
+        df = get_crypto_data(symbol)
+        if df is not None: df.to_csv(f"{SAVE_PATH}{symbol}_daily.csv")
+            
+    for func, name in assets["macro"]:
+        df = get_macro_data(func, name)
+        if df is not None: df.to_csv(f"{SAVE_PATH}{name}.csv")
+
+    print(f"✅ Dane gotowe w {SAVE_PATH}")
 
 if __name__ == "__main__":
-    fetch_data()
-    print("\n🎯 BIBLIOTEKA DANYCH KOMPLETNA.")
+    main()
