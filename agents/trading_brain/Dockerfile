@@ -19,7 +19,10 @@ RUN pip install --no-cache-dir \
     requests \
     pandas \
     redis \
-    PyMuPDF
+    PyMuPDF \
+    ebooklib \
+    beautifulsoup4 \
+    lxml
 
 # Stos LLM – pełne zależności (pyyaml, tqdm, regex itp. zostaną dociągnięte)
 RUN pip install --no-cache-dir \
