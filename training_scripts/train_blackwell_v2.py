@@ -6,7 +6,6 @@ from datasets import load_dataset
 from trl import SFTTrainer
 
 # 0. KONFIGURACJA ŚRODOWISKA
-# Kierujemy ogromne pliki na dysk współdzielony (shared_data)
 os.environ["HF_HOME"] = "/app/shared_data/hf_cache"
 os.environ["TRANSFORMERS_CACHE"] = "/app/shared_data/hf_cache"
 
@@ -23,35 +22,37 @@ def train():
     )
     tokenizer.pad_token = tokenizer.eos_token
 
-    # 2. PATCHOWANIE KONFIGURACJI (Rozwiązuje błąd AttributeError i ModelOpt)
-    print(f"🛠️  Patchowanie konfiguracji modelu...")
+    # 2. PATCHOWANIE KONFIGURACJI
+    print(f"🛠️  Patchowanie konfiguracji modelu (MoE + NVFP4)...")
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     
-    # Usuwamy informację o kwantyzacji, aby transformers nie próbował jej obsługiwać.
-    # Dzięki trust_remote_code=True, kod NVIDIA sam rozpozna wagi NVFP4.
+    # Usuwamy quantization_config, aby uniknąć konfliktów z biblioteką transformers
     if hasattr(config, "quantization_config"):
-        print("💡 Wykryto quantization_config - usuwanie dla poprawnego ładowania NVFP4...")
+        print("💡 Usuwanie quantization_config dla natywnej obsługi NVFP4...")
         del config.quantization_config
 
-    # 3. ŁADOWANIE MODELU (Zoptymalizowane pod Blackwell sm_121)
-    print(f"📥 Ładowanie modelu 120B (Wymaga mamba-ssm i flash-attn 2.1+)...")
+    # 3. ŁADOWANIE MODELU (Z poprawką ignore_mismatched_sizes)
+    print(f"📥 Ładowanie modelu 120B do VRAM...")
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         config=config,
         device_map="auto",
         trust_remote_code=True,
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.bfloat16, # Formacie obliczeniowy Blackwella
-        low_cpu_mem_usage=True
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        # KLUCZOWE: Ignorujemy różnice wymiarów w warstwach ekspertów MoE
+        ignore_mismatched_sizes=True 
     )
 
-    # 4. PRZYGOTOWANIE LORA (Fine-tuning architektury hybrydowej)
+    # 4. PRZYGOTOWANIE LORA
+    # Fine-tuning 120-miliardowego mózgu wymaga zamrożenia wag bazowych
     model = prepare_model_for_kbit_training(model)
     
     peft_config = LoraConfig(
         r=64, 
         lora_alpha=128,
-        # Celujemy w warstwy Attention oraz Mamba
+        # Celujemy w kluczowe moduły Attention i Mamba
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.05,
         bias="none",
@@ -72,7 +73,7 @@ def train():
             output_texts.append(text)
         return output_texts
 
-    # 6. PARAMETRY TRENINGU (Pełna moc GB10)
+    # 6. PARAMETRY TRENINGU (Zoptymalizowane pod GB10 128GB)
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=1, 
@@ -83,19 +84,19 @@ def train():
         bf16=True,
         save_strategy="steps",
         save_steps=50,
-        optim="paged_adamw_8bit",
+        optim="paged_adamw_8bit", # Oszczędność VRAM na optymalizatorze
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         gradient_checkpointing=True,
         report_to="none"
     )
 
-    # 7. INICJALIZACJA TRENERA SFT
+    # 7. INICJALIZACJA TRENERA
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
         peft_config=peft_config,
-        max_seq_length=8192, # Wykorzystujemy duży VRAM Blackwella
+        max_seq_length=8192, 
         tokenizer=tokenizer,
         args=training_args,
         formatting_func=formatting_prompts_func,
@@ -106,7 +107,7 @@ def train():
 
     # 8. ZAPIS FINALNY
     trainer.save_model(OUTPUT_DIR)
-    print(f"✅ Sukces! Model zapisany w: {OUTPUT_DIR}")
+    print(f"✅ Trening zakończony! Model zapisany w: {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     train()
