@@ -1,14 +1,34 @@
 FROM nvcr.io/nvidia/pytorch:24.01-py3
 
+# Git wymagany przez unsloth
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip
+
+# Biblioteki runtime (pandas/numpy/torch już w obrazie bazowym)
 RUN pip install --no-cache-dir \
-    vllm pandas numpy redis \
-    pandas_ta requests \
-    "unsloth[cu124-torch240] @ git+https://github.com/unslothai/unsloth.git" \
-    PyMuPDF trl peft datasets
+    redis \
+    requests \
+    PyMuPDF
+
+# Biblioteki treningowe: instalujemy bez upgrade'owania torch,
+# żeby nie nadpisać wersji CUDA-aware z obrazu NVIDIA
+RUN pip install --no-cache-dir --no-deps \
+    trl \
+    peft \
+    accelerate \
+    bitsandbytes \
+    transformers \
+    tokenizers \
+    safetensors \
+    huggingface_hub
+
+RUN pip install --no-cache-dir datasets
+
+# Unsloth - osobna warstwa dla cache'owania
+RUN pip install --no-cache-dir \
+    "unsloth @ git+https://github.com/unslothai/unsloth.git"
 
 WORKDIR /app
-COPY trading_core.py .
-
-# Odpalamy serwer vLLM z obsługą Nemotrona
-# Wykorzystujemy moc obliczeniową Blackwell (FP8 jeśli model wspiera)
-CMD ["python", "-m", "vllm.entrypoints.openai.api_server",      "--model", "nvidia/Nemotron-3-Super-120B-A12B",      "--tensor-parallel-size", "1",      "--gpu-memory-utilization", "0.90"]
+RUN mkdir -p /app/scripts /app/shared_data

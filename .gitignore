@@ -1,5 +1,5 @@
 # Ignoruj folder z danymi, wagami modeli i logami treningu
-shared_data/librbry
+shared_data/library
 
 # Ignoruj środowiska wirtualne Pythona
 venv/
@@ -17,6 +17,12 @@ __pycache__/
 
 # Ignoruj logi Docker
 *.log
+
+# Wygenerowane dane treningowe (duże pliki)
+shared_data/*.jsonl
+
+# Artefakty pip
+training_scripts/=*
 
 # Pliki systemowe
 .DS_Store
