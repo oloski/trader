@@ -59,7 +59,7 @@ def main():
     print(f"   - Dane z książek:          {len(books_data)}")
 
     # Upsampling przez deep copy — unikamy shallow copy przy mnożeniu listy
-    balanced_market = [dict(entry) for entry in market_data] * MARKET_MULTIPLIER
+    balanced_market = [dict(entry) for entry in market_data * MARKET_MULTIPLIER]
 
     combined_dataset = balanced_market + books_data
     total = len(combined_dataset)

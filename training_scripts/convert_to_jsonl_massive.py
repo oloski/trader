@@ -8,49 +8,62 @@ OUTPUT_FILE = "/app/shared_data/market_training.jsonl"
 
 
 def build_market_output(asset_name: str, row: pd.Series, change: float) -> str:
-    """Buduje ustrukturyzowany output uwzględniający ATR i kanały Donchiana."""
-    atr = row.get('atr', 0)
-    dc_high = row.get('dc_high', 0)
-    dc_low = row.get('dc_low', 0)
-    close = row.get('close', 0)
+    """Buduje ustrukturyzowany output z sygnałem i kontekstem wskaźników."""
+    atr    = row.get('atr', 0)
+    dc_h   = row.get('dc_high', 0)
+    dc_l   = row.get('dc_low', 0)
+    close  = row.get('close', 0)
+    rsi    = row.get('rsi', 0)
+    adx    = row.get('adx', 0)
+    macd_h = row.get('macd_hist', 0)
 
-    output = f"Na {asset_name} cena zmieniła się o {change:.2f}%"
-
-    if dc_high and dc_low:
-        if close >= dc_high:
-            signal = "BUY — wybicie szczytu kanału Donchiana (DC_H={dc_high:.2f})."
-            output += f". {signal.format(dc_high=dc_high)}"
-        elif close <= dc_low:
-            signal = "SELL — przebicie dołka kanału Donchiana (DC_L={dc_low:.2f})."
-            output += f". {signal.format(dc_low=dc_low)}"
-        elif abs(change) > 2:
-            output += f". Wysoka zmienność (ATR={atr:.4f}), cena wewnątrz kanału — obserwuj przebicie."
+    # Sygnał Donchiana (strategia Żółwia)
+    if dc_h and dc_l:
+        if close >= dc_h:
+            signal = f"BUY — wybicie szczytu kanału Donchiana (DC_H={dc_h:.2f})."
+        elif close <= dc_l:
+            signal = f"SELL — przebicie dołka kanału Donchiana (DC_L={dc_l:.2f})."
         else:
-            output += f". Konsolidacja wewnątrz kanału Donchiana [{dc_low:.2f}–{dc_high:.2f}], ATR={atr:.4f}."
-    elif abs(change) > 2:
-        output += f". Wysoka zmienność (ATR={atr:.4f}) — potencjalna redefinicja trendu."
+            signal = f"HOLD — cena wewnątrz kanału [{dc_l:.2f}–{dc_h:.2f}]."
     else:
-        output += f". Niska zmienność (ATR={atr:.4f}) — konsolidacja."
+        signal = "HOLD — brak danych kanału."
 
+    # Kontekst wskaźników
+    trend = "wzrostowy" if macd_h > 0 else "spadkowy"
+    strength = "silny" if adx > 25 else "słaby"
+    rsi_ctx = "wykupienie" if rsi > 70 else ("wyprzedanie" if rsi < 30 else "neutralny")
+
+    output = (
+        f"{asset_name}: {signal} "
+        f"Zmiana: {change:+.2f}%, ATR={atr:.4f}. "
+        f"Trend {trend} ({strength}, ADX={adx:.1f}). "
+        f"RSI={rsi:.1f} ({rsi_ctx}), MACD_hist={macd_h:.4f}."
+    )
     return output
 
 
 def build_macro_output(asset_name: str, row: pd.Series, change: float) -> str:
     """Buduje output dla danych makroekonomicznych."""
-    value = row.get('value', 0)
-    trend_ma = row.get('trend_ma', 0)
+    value    = row.get('value', 0)
+    ma7      = row.get('trend_ma7', 0)   # fix: było trend_ma, teraz trend_ma7
+    ma30     = row.get('trend_ma30', 0)
+    zscore   = row.get('zscore_1y', 0)
 
     output = f"Wskaźnik {asset_name} wynosi {value:.2f}"
-    if trend_ma:
-        output += f" (MA7={trend_ma:.2f})"
+    if ma7:
+        output += f" (MA7={ma7:.2f}, MA30={ma30:.2f})"
     output += ". "
 
-    if change > 0.5:
-        output += "Wzrost dynamiki może wywierać presję na aktywa ryzykowne."
+    if zscore > 1.5:
+        output += f"Historycznie wysoki poziom (z-score={zscore:.2f}) — potencjalna presja na aktywa ryzykowne."
+    elif zscore < -1.5:
+        output += f"Historycznie niski poziom (z-score={zscore:.2f}) — sprzyja aktywom ryzykownym."
+    elif change > 0.5:
+        output += "Wzrost dynamiki — obserwuj wpływ na rynki."
     elif change < -0.5:
-        output += "Spadek dynamiki sprzyja aktywom ryzykownym i surowcom."
+        output += "Spadek dynamiki — potencjalne rozluźnienie presji rynkowej."
     else:
-        output += "Stabilizacja wskaźnika — brak wyraźnego impulsu dla rynków."
+        output += "Stabilizacja wskaźnika — brak wyraźnego impulsu."
     return output
 
 
