@@ -34,19 +34,15 @@ RUN pip install --no-cache-dir \
     bitsandbytes \
     huggingface_hub
 
-# Uwaga 1: causal-conv1d PRZED mamba-ssm (wymagana zależność)
-RUN pip install --no-cache-dir "causal-conv1d>=1.4.0" --no-build-isolation
-
-# Uwaga 3: MAX_JOBS ogranicza zużycie RAMu przy kompilacji CUDA
-ENV MAX_JOBS=4
-
-# Flash-Attention i Mamba (kompilacja natywna)
-RUN pip install --no-cache-dir flash-attn --no-build-isolation
-RUN pip install --no-cache-dir mamba-ssm --no-build-isolation
-
-# Unsloth
+# Unsloth (nie wymaga GPU przy instalacji)
 RUN pip install --no-cache-dir \
     "unsloth @ git+https://github.com/unslothai/unsloth.git"
+
+# causal-conv1d, flash-attn, mamba-ssm wymagają GPU podczas kompilacji.
+# Instaluj je ręcznie wewnątrz działającego kontenera:
+#   docker exec -it blackwell_trader_ai bash /app/scripts/install_gpu_libs.sh
+# MAX_JOBS ogranicza zużycie RAMu przy kompilacji
+ENV MAX_JOBS=4
 
 WORKDIR /app
 RUN mkdir -p /app/scripts /app/shared_data

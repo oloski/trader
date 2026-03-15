@@ -1,75 +1,138 @@
 import pandas as pd
-import os
 import json
+import os
 
-LIBRARY_PATH = "/app/shared_data/library"
+# --- KONFIGURACJA ---
+INPUT_DIR = "/app/shared_data/raw_market_data/"
 OUTPUT_FILE = "/app/shared_data/market_training.jsonl"
 
-def find_close_column(df):
-    """Próbuje znaleźć kolumnę z ceną zamknięcia niezależnie od nazwy"""
-    possible_names = ['close', 'value', '4. close', '4a. close (usd)', 'adjusted close']
-    cols = {c.lower(): c for c in df.columns}
-    for name in possible_names:
-        if name in cols:
-            return cols[name]
-    # Jeśli nie znalazł, weź pierwszą dostępną kolumnę, która nie jest indeksem/wskaźnikiem
-    skip = ['index', 'date', 'atr', 'dc_h', 'dc_l']
-    for c in df.columns:
-        if c.lower() not in skip:
-            return c
-    return None
 
-def generate_market_prompts():
-    all_entries = []
-    if not os.path.exists(LIBRARY_PATH):
-        print(f"❌ Folder {LIBRARY_PATH} nie istnieje!")
+def build_market_output(asset_name: str, row: pd.Series, change: float) -> str:
+    """Buduje ustrukturyzowany output uwzględniający ATR i kanały Donchiana."""
+    atr = row.get('atr', 0)
+    dc_high = row.get('dc_high', 0)
+    dc_low = row.get('dc_low', 0)
+    close = row.get('close', 0)
+
+    output = f"Na {asset_name} cena zmieniła się o {change:.2f}%"
+
+    if dc_high and dc_low:
+        if close >= dc_high:
+            signal = "BUY — wybicie szczytu kanału Donchiana (DC_H={dc_high:.2f})."
+            output += f". {signal.format(dc_high=dc_high)}"
+        elif close <= dc_low:
+            signal = "SELL — przebicie dołka kanału Donchiana (DC_L={dc_low:.2f})."
+            output += f". {signal.format(dc_low=dc_low)}"
+        elif abs(change) > 2:
+            output += f". Wysoka zmienność (ATR={atr:.4f}), cena wewnątrz kanału — obserwuj przebicie."
+        else:
+            output += f". Konsolidacja wewnątrz kanału Donchiana [{dc_low:.2f}–{dc_high:.2f}], ATR={atr:.4f}."
+    elif abs(change) > 2:
+        output += f". Wysoka zmienność (ATR={atr:.4f}) — potencjalna redefinicja trendu."
+    else:
+        output += f". Niska zmienność (ATR={atr:.4f}) — konsolidacja."
+
+    return output
+
+
+def build_macro_output(asset_name: str, row: pd.Series, change: float) -> str:
+    """Buduje output dla danych makroekonomicznych."""
+    value = row.get('value', 0)
+    trend_ma = row.get('trend_ma', 0)
+
+    output = f"Wskaźnik {asset_name} wynosi {value:.2f}"
+    if trend_ma:
+        output += f" (MA7={trend_ma:.2f})"
+    output += ". "
+
+    if change > 0.5:
+        output += "Wzrost dynamiki może wywierać presję na aktywa ryzykowne."
+    elif change < -0.5:
+        output += "Spadek dynamiki sprzyja aktywom ryzykownym i surowcom."
+    else:
+        output += "Stabilizacja wskaźnika — brak wyraźnego impulsu dla rynków."
+    return output
+
+
+def process_csv_to_jsonl():
+    if not os.path.exists(INPUT_DIR):
+        print(f"❌ Folder {INPUT_DIR} nie istnieje! Uruchom najpierw init_data.py.")
         return
 
-    files = [f for f in os.listdir(LIBRARY_PATH) if f.endswith("_enriched.csv")]
-    
-    for file in files:
-        asset_name = file.replace("_enriched.csv", "")
-        df = pd.read_csv(os.path.join(LIBRARY_PATH, file))
-        
-        close_col = find_close_column(df)
-        if not close_col:
-            print(f"⚠️ Pominąłem {file}: nie znaleziono kolumny ceny.")
+    all_entries = []
+
+    for filename in sorted(os.listdir(INPUT_DIR)):
+        if not filename.endswith(".csv"):
             continue
 
-        print(f"Processing {asset_name} (Column: {close_col})...")
+        file_path = os.path.join(INPUT_DIR, filename)
+        asset_name = filename.replace("_daily.csv", "").replace(".csv", "")
 
-        # Generowanie próbek co 5 dni (stride=5), by uniknąć overfittingu na Blackwellu
-        for i in range(20, len(df), 5):
+        # Fix 1: index_col=0 — daty trafiają do indeksu, nie do Unnamed:0
+        try:
+            df = pd.read_csv(file_path, index_col=0)
+        except Exception as e:
+            print(f"  ❌ Błąd odczytu {filename}: {e}")
+            continue
+
+        print(f"📊 Przetwarzanie: {asset_name} ({len(df)} wierszy)...")
+
+        for i in range(1, len(df)):
             row = df.iloc[i]
-            prev_row = df.iloc[i-1]
-            
-            close_val = float(row[close_col])
-            prev_close = float(prev_row[close_col])
-            atr = float(row['ATR'])
-            dc_h = float(row['DC_H'])
-            dc_l = float(row['DC_L'])
+            prev_row = df.iloc[i - 1]
+            date = df.index[i]
 
-            instruction = f"Analiza trendu i zmienności dla {asset_name}."
-            input_data = (f"Cena: {close_val:.2f}, Poprzednia: {prev_close:.2f}, "
-                          f"ATR: {atr:.2f}, Donchian H: {dc_h:.2f}, L: {dc_l:.2f}")
-            
-            # Prosta logika opisu dla modelu
-            trend = "wzrostowy (powyżej DC_H)" if close_val >= dc_h else \
-                    "spadkowy (poniżej DC_L)" if close_val <= dc_l else "boczny"
-            
-            output = f"Na podstawie danych, {asset_name} wykazuje trend {trend}. Poziom zmienności ATR wynosi {atr:.2f}."
-            
+            try:
+                if 'close' in df.columns:
+                    # Fix 3: zabezpieczenie przed dzieleniem przez zero
+                    prev_close = prev_row['close']
+                    if not prev_close or prev_close == 0:
+                        continue
+                    change = ((row['close'] - prev_close) / prev_close) * 100
+                    context = (
+                        f"Zamknięcie: {row['close']:.2f} USD, "
+                        f"Zmiana: {change:+.2f}%, "
+                        f"Wolumen: {row.get('volume', 'N/A')}, "
+                        f"ATR: {row.get('atr', 0):.4f}, "
+                        f"DC: [{row.get('dc_low', 0):.2f}–{row.get('dc_high', 0):.2f}]"
+                    )
+                    instruction = f"Przeanalizuj sytuację techniczną na {asset_name} na dzień {date}."
+                    output = build_market_output(asset_name, row, change)
+
+                elif 'value' in df.columns:
+                    change = row.get('momentum', 0) * 100
+                    context = (
+                        f"Wartość: {row['value']:.2f}, "
+                        f"Dynamika: {change:+.2f}%, "
+                        f"MA7: {row.get('trend_ma', 0):.2f}"
+                    )
+                    instruction = f"Jakie znaczenie dla rynku mają dane makroekonomiczne {asset_name} z dnia {date}?"
+                    output = build_macro_output(asset_name, row, change)
+
+                else:
+                    # Fix 2: nieznany format — pomijamy zamiast crashować
+                    continue
+
+            except Exception as e:
+                print(f"  ⚠️  Wiersz {i} w {filename}: {e}")
+                continue
+
             all_entries.append({
                 "instruction": instruction,
-                "input": input_data,
+                "input": f"Data: {date} | {context}",
                 "output": output
             })
+
+    if not all_entries:
+        print("⚠️  Brak danych do zapisu.")
+        return
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         for entry in all_entries:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-    
-    print(f"✅ Sukces! Wygenerowano {len(all_entries)} próbek rynkowych w {OUTPUT_FILE}")
+
+    print(f"\n✅ Market Dataset gotowy: {len(all_entries)} rekordów → {OUTPUT_FILE}")
+
 
 if __name__ == "__main__":
-    generate_market_prompts()
+    process_csv_to_jsonl()
