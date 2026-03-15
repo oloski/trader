@@ -1,94 +1,31 @@
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from datasets import load_dataset
-from trl import SFTTrainer
+version: '3.8'
 
-# 1. KONFIGURACJA MODELU GIGANTA
-MODEL_NAME = "nvidia/nemotron-3-120b-base" 
-DATASET_PATH = "/app/shared_data/master_training.jsonl"
-OUTPUT_DIR = "/app/shared_data/nemotron_120b_strategy_v2"
-
-def train():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    # 2. KONFIGURACJA 4-BIT (Niezbędna, by 120B zmieściło się w 128GB VRAM wraz z kontekstem)
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
-
-    # 3. ŁADOWANIE MODELU
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        quantization_config=bnb_config,
-        device_map="auto", # Rozłoży model optymalnie na Blackwella
-        attn_implementation="flash_attention_2", 
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=True
-    )
-
-    model = prepare_model_for_kbit_training(model)
-
-    # 4. LoRA DLA GIGANTA
-    # Przy 120B parametrach, LoRA r=64 daje ogromną precyzję adaptacji.
-    peft_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
-
-    model = get_peft_model(model, peft_config)
-
-    # 5. PRZYGOTOWANIE DATASETU
-    dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
-
-    def formatting_prompts_func(example):
-        output_texts = []
-        for i in range(len(example['instruction'])):
-            text = f"### Instrukcja:\n{example['instruction'][i]}\n\n### Dane:\n{example['input'][i]}\n\n### Analiza:\n{example['output'][i]}"
-            output_texts.append(text)
-        return output_texts
-
-    # 6. PARAMETRY TRENINGU (Ekstremalnie zoptymalizowane pod 120B)
-    training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=1,  # Przy 120B i 8k kontekstu, 1 to bezpieczny max
-        gradient_accumulation_steps=16, # Zwiększamy akumulację, by symulować batch size 16
-        learning_rate=1e-4,             # Nieco mniejszy LR dla stabilności giganta
-        logging_steps=1,
-        num_train_epochs=2,             # Przy 120B dwie epoki to już ogromna zmiana
-        bf16=True,
-        save_strategy="steps",
-        save_steps=50,
-        optim="paged_adamw_8bit",       # Paged AdamW ratuje życie przy braku VRAM
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
-        gradient_checkpointing=True,    # Krytyczne dla oszczędności pamięci
-        report_to="none"
-    )
-
-    trainer = SFTTrainer(
-        model=model,
-        train_dataset=dataset,
-        peft_config=peft_config,
-        max_seq_length=8192,           # Pełne okno kontekstowe
-        tokenizer=tokenizer,
-        args=training_args,
-        formatting_func=formatting_prompts_func,
-    )
-
-    print("🚀 UWAGA: Startuję trening NEMOTRON-120B. Blackwell wchodzi na pełne obroty...")
-    trainer.train()
-
-    trainer.save_model(OUTPUT_DIR)
-    print(f"✅ Finał! Strategia V2 (120B) gotowa w: {OUTPUT_DIR}")
-
-if __name__ == "__main__":
-    train()
+services:
+  blackwell_trader_ai:
+    container_name: blackwell_trader_ai
+    image: nvidia/cuda:12.8.0-devel-ubuntu22.04  # Najnowsza baza pod Blackwell (2026)
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/app/shared_data/hf_cache
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+    volumes:
+      # Mapujemy skrypty treningowe
+      - /home/trader/training_scripts:/app/scripts
+      # Mapujemy dysk na dane (modele, dataset, cache)
+      - /home/trader/shared_data:/app/shared_data
+    # Zwiększony limit pamięci współdzielonej dla modeli 100B+
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    # Ustawiamy working directory wewnątrz kontenera
+    working_dir: /app
