@@ -35,13 +35,19 @@ RUN pip install --no-cache-dir \
     bitsandbytes \
     huggingface_hub
 
-# causal-conv1d, mamba-ssm i flash-attn wymagają GPU lub specyficznego runtime
-# do kompilacji i NIE mogą być zbudowane podczas docker build.
-# Po uruchomieniu kontenera zainstaluj je ręcznie:
-#   docker exec -it blackwell_trader_ai bash /app/scripts/install_gpu_libs.sh
 ENV PATH=/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 ENV MAX_JOBS=4
+# Arch list: 9.0 = Hopper, 12.0 = Blackwell (GB10)
+ENV TORCH_CUDA_ARCH_LIST="9.0;12.0"
+ENV CAUSAL_CONV1D_FORCE_BUILD=TRUE
+ENV MAMBA_FORCE_BUILD=TRUE
+
+# GPU libs: kompilacja ze źródeł przez nvcc (dostępny w cuda:devel image)
+# --no-build-isolation: używa już zainstalowanego torch CUDA zamiast CPU z PyPI
+RUN pip install --no-cache-dir causal-conv1d --no-build-isolation
+RUN pip install --no-cache-dir mamba-ssm --no-build-isolation
+RUN pip install --no-cache-dir flash-attn --no-build-isolation
 
 # Unsloth (nie wymaga GPU przy instalacji)
 RUN pip install --no-cache-dir \
